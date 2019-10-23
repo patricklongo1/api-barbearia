@@ -24,6 +24,14 @@ class User extends Model {
     return this;
   }
 
+  static associate(models) {
+    this.belongsTo(models.File, {
+      // Relaciona File ao User, evitando criação da "coluna" direto no model.
+      foreignKey: 'avatar_id',
+      as: 'avatar', // as:avatar da um codnome para o relacionamento. (Usado no ProviderController)
+    });
+  }
+
   checkPassword(password) {
     return bcrypt.compare(password, this.password_hash);
   }
