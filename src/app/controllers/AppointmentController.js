@@ -1,5 +1,5 @@
 import * as Yup from 'yup';
-import { startOfHour, parseISO, isBefore, format } from 'date-fns';
+import { startOfHour, parseISO, isBefore, format, subHours } from 'date-fns';
 import pt from 'date-fns/locale/pt';
 
 import User from '../models/User';
@@ -7,6 +7,8 @@ import Appointment from '../models/Appointment';
 import File from '../models/File';
 
 import Notification from '../schemas/Notification';
+
+import Mail from '../../lib/mail';
 
 class AppointmentController {
   async index(req, res) {
@@ -38,71 +40,120 @@ class AppointmentController {
   }
 
   async store(req, res) {
-    const schema = Yup.object().shape({
-      provider_id: Yup.number().required(),
-      date: Yup.date().required(),
-    });
-    if (!(await schema.isValid(req.body))) {
-      return res.status(400).json({ error: 'Validation fails' });
-    }
+    try {
+      const schema = Yup.object().shape({
+        provider_id: Yup.number().required(),
+        date: Yup.date().required(),
+      });
+      if (!(await schema.isValid(req.body))) {
+        return res.status(400).json({ error: 'Validation fails' });
+      }
 
-    const { provider_id, date } = req.body;
+      const { provider_id, date } = req.body;
 
-    /**
-     * checar se o provider_id é realmente de um provider
-     */
-    const isProvider = await User.findOne({
-      where: { id: provider_id, provider: true },
-    });
+      /**
+       * checar se o provider_id é realmente de um provider
+       */
+      const isProvider = await User.findOne({
+        where: { id: provider_id, provider: true },
+      });
 
-    if (!isProvider) {
-      return res
-        .status(401)
-        .json({ error: 'You can only create appointments with providers' });
-    }
+      if (!isProvider) {
+        return res
+          .status(401)
+          .json({ error: 'You can only create appointments with providers' });
+      }
 
-    // Compara pra ver se data utilizada pelo user já passou.
-    const hourStart = startOfHour(parseISO(date));
-    if (isBefore(hourStart, new Date())) {
-      return res.status(400).json({ error: 'Past dates are not permitted' });
-    }
+      // Provider não pode marcar appointment com ele mesmo.
+      if (req.userId === provider_id) {
+        return res
+          .status(400)
+          .json({ error: 'You cant create a appointment with yourself' });
+      }
 
-    // Checar se o provider está disponivel para esta data/horario
-    const checkAvailability = await Appointment.findOne({
-      where: {
+      // Compara pra ver se data utilizada pelo user já passou.
+      const hourStart = startOfHour(parseISO(date));
+      if (isBefore(hourStart, new Date())) {
+        return res.status(400).json({ error: 'Past dates are not permitted' });
+      }
+
+      // Checar se o provider está disponivel para esta data/horario
+      const checkAvailability = await Appointment.findOne({
+        where: {
+          provider_id,
+          canceled_at: null, // Verifica se tem um agendamento que não está cancelado pra este horario.
+          date: hourStart,
+        },
+      });
+      if (checkAvailability) {
+        return res
+          .status(400)
+          .json({ error: 'Appointment date is not available' });
+      }
+
+      // Criando appointment na tabela
+      const appointment = await Appointment.create({
+        user_id: req.userId, // userId vem do middleware de autenticação que seta este valor quando o user faz login
         provider_id,
-        canceled_at: null, // Verifica se tem um agendamento que não está cancelado pra este horario.
         date: hourStart,
-      },
+      });
+
+      // notificar provider
+      const user = await User.findByPk(req.userId);
+      const formattedDate = format(
+        hourStart,
+        "'dia' dd 'de' MMMM', ás' H:mm'h'",
+        { locale: pt }
+      );
+
+      await Notification.create({
+        content: `Novo agendamento de ${user.name} para ${formattedDate}`,
+        user: provider_id,
+      });
+
+      return res.json(appointment);
+    } catch (err) {
+      console.log(err);
+      return null;
+    }
+  }
+
+  async destroy(req, res) {
+    const appointment = await Appointment.findByPk(req.params.id, {
+      include: [
+        {
+          model: User,
+          as: 'provider', // Include para criar o objeto para uso no envio de email logo abaixo
+          attributes: ['name', 'email'],
+        },
+      ],
     });
-    if (checkAvailability) {
-      return res
-        .status(400)
-        .json({ error: 'Appointment date is not available' });
+
+    if (appointment.user_id !== req.userId) {
+      return res.status(401).json({
+        error: "You don't have permission to cancel this appointment",
+      });
     }
 
-    // Criando appointment na tabela
-    const appointment = await Appointment.create({
-      user_id: req.userId, // userId vem do middleware de autenticação que seta este valor quando o user faz login
-      provider_id,
-      date: hourStart,
-    });
+    const dateWithSub = subHours(appointment.date, 2); // Reduz 2 horas da data de agendamento que esta no banco
+    // neste caso não precisa converter com o parseISO pois ja vem do banco como hora. quando vem da req vem como String
 
-    // notificar provider
-    const user = await User.findByPk(req.userId);
-    const formattedDate = format(
-      hourStart,
-      "'dia' dd 'de' MMMM', ás' H:mm'h'",
-      { locale: pt }
-    );
+    if (isBefore(dateWithSub, new Date())) {
+      return res.status(401).json({
+        error: 'You can only cancel appointments 2 hours in advance',
+      });
+    }
 
-    await Notification.create({
-      content: `Novo agendamento de ${user.name} para ${formattedDate}`,
-      user: provider_id,
+    appointment.canceled_at = new Date();
+    await appointment.save();
+
+    await Mail.sendMail({
+      to: `${appointment.provider.name} <${appointment.provider.email}>`,
+      subject: 'Agendamento cancelado',
+      text: 'Você tem um novo cancelamento',
     });
 
     return res.json(appointment);
   }
 }
-
 export default new AppointmentController();
