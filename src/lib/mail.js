@@ -13,7 +13,6 @@ class Mail {
       secure,
       auth: auth.user ? auth : null, // verifica se existe um user no auth e retorna ele, se não retorna null
     });
-
     this.configureTemplates();
   }
 
