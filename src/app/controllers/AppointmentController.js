@@ -7,8 +7,9 @@ import Appointment from '../models/Appointment';
 import File from '../models/File';
 
 import Notification from '../schemas/Notification';
+import CancellationMail from '../jobs/CancellationMail';
 
-import Mail from '../../lib/mail';
+import Queue from '../../lib/Queue';
 
 class AppointmentController {
   async index(req, res) {
@@ -113,7 +114,6 @@ class AppointmentController {
 
       return res.json(appointment);
     } catch (err) {
-      console.log(err);
       return null;
     }
   }
@@ -152,18 +152,8 @@ class AppointmentController {
     appointment.canceled_at = new Date();
     await appointment.save();
 
-    await Mail.sendMail({
-      to: `${appointment.provider.name} <${appointment.provider.email}>`,
-      subject: 'Agendamento cancelado',
-      template: 'cancellation',
-      context: {
-        provider: appointment.provider.name, // Coletado no include logo acima
-        user: appointment.user.name, // Coletado no include logo acima
-        date: format(appointment.date, "'dia' dd 'de' MMMM', ás' H:mm'h'", {
-          // Formatado como no metodo store
-          locale: pt,
-        }),
-      },
+    await Queue.add(CancellationMail.key, {
+      appointment,
     });
 
     return res.json(appointment);
