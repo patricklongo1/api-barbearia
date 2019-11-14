@@ -3,6 +3,7 @@ import 'dotenv/config'; // yarn add dotenv - seta as variaveis de ambiente em pr
 import express from 'express';
 import 'express-async-errors'; // yarn add express-async-errors pois o node não capta errors em functions async sem esta extensao
 import path from 'path';
+import cors from 'cors';
 import Youch from 'youch';
 import * as Sentry from '@sentry/node';
 import sentryConfig from './config/sentry';
@@ -23,6 +24,7 @@ class App {
   middlewares() {
     // The request handler must be the first middleware on the app
     this.server.use(Sentry.Handlers.requestHandler());
+    this.server.use(cors())
     this.server.use(express.json()); // Recebe reqs em JSON
     this.server.use(
       '/files', // Cria url para as imagens de temp/uploads

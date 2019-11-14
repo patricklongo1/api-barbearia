@@ -8,7 +8,6 @@ class CancellationMail {
   }
 
   async handle({ data }) {
-    console.log('A fila executou'); // Remover após teste
     const { appointment } = data;
     await Mail.sendMail({
       to: `${appointment.provider.name} <${appointment.provider.email}>`,
